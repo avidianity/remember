@@ -4,7 +4,7 @@ use super::memory::{memory_row_tokens, replace, touch_task};
 use super::{Caller, Hub, check_len, check_secret, required};
 use crate::error::{Error, Result};
 use crate::model::{age, memory_ref, parse_ref, task_ref};
-use crate::views::{Brief, MemoryRow, TaskList, TaskView, fit, row_tokens};
+use crate::views::{Brief, MemoryRow, TaskList, TaskListRow, TaskView, fit, row_tokens};
 
 struct TaskRecord {
     id: i64,
@@ -18,9 +18,30 @@ struct TaskRecord {
 impl Hub {
     pub fn list_tasks(&self, agent_id: &str, include_done: bool) -> Result<TaskList> {
         let caller = self.caller(agent_id)?;
-        Ok(TaskList {
-            tasks: self.task_rows(caller.project_id, self.now(), include_done)?,
-        })
+        let now = self.now();
+        let online_since = now - self.limits.online_window_secs;
+        let tasks = self
+            .task_rows(caller.project_id, now, include_done)?
+            .into_iter()
+            .map(|t| {
+                let task_id = parse_ref(&t.id, 't', "task")?;
+                let agents: Vec<String> = self.query_rows(
+                    "SELECT id FROM agents WHERE current_task_id = ?1 AND ended_at IS NULL
+                     AND last_seen_at >= ?2 ORDER BY last_seen_at DESC",
+                    params![task_id, online_since],
+                    |r| r.get(0),
+                )?;
+                Ok(TaskListRow {
+                    id: t.id,
+                    title: t.title,
+                    status: t.status,
+                    agents: agents.join(" "),
+                    last_agent: t.last_agent,
+                    age: t.age,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(TaskList { tasks })
     }
 
     /// Creates a Task in the caller's Project and makes it the Current Task.

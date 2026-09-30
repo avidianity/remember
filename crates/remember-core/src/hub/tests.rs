@@ -3,7 +3,7 @@ use std::sync::atomic::{AtomicI64, Ordering};
 
 use super::*;
 use crate::model::{Category, DAY, Scope};
-use crate::{NewMemory, RecallQuery};
+use crate::{NewMemory, RecallQuery, Terminal};
 
 const START: i64 = 1_790_000_000;
 
@@ -654,4 +654,90 @@ fn forget_is_limited_to_visible_memories() {
     );
     f.hub.forget(&a, &id).unwrap();
     assert!(f.recall(&a, None).is_empty());
+}
+
+#[test]
+fn context_shows_online_agents_and_their_tasks() {
+    let mut f = Fixture::new();
+    let a = f.hub.register("claude-code", "p").unwrap();
+    let b = f.hub.register("codex", "p").unwrap();
+    let elsewhere = f.hub.register("opencode", "other").unwrap();
+    f.hub.context(&b, Some("frontend")).unwrap();
+    f.hub.start_task(&b, "Build settings page", None).unwrap();
+    let gone = f.hub.register("opencode", "p").unwrap();
+    f.hub.end(&gone).unwrap();
+
+    let context = f.hub.context(&a, None).unwrap();
+    assert_eq!(
+        context.agents.len(),
+        1,
+        "self, ended and other-project agents are hidden"
+    );
+    let row = &context.agents[0];
+    assert_eq!(
+        (row.id.as_str(), row.label.as_deref(), row.task.as_deref()),
+        (b.as_str(), Some("frontend"), Some("t1"))
+    );
+    assert!(f.hub.context(&elsewhere, None).unwrap().agents.is_empty());
+
+    f.advance(11 * 60);
+    assert!(
+        f.hub.context(&a, None).unwrap().agents.is_empty(),
+        "silent agents drop off"
+    );
+}
+
+#[test]
+fn task_list_shows_who_is_in_each_task() {
+    let mut f = Fixture::new();
+    let a = f.hub.register("claude-code", "p").unwrap();
+    let b = f.hub.register("codex", "p").unwrap();
+    f.hub.start_task(&a, "shared", None).unwrap();
+    f.hub.join_task(&b, "t1").unwrap();
+    f.hub.start_task(&a, "solo", None).unwrap();
+    let tasks = f.hub.list_tasks(&a, false).unwrap().tasks;
+    let shared = tasks.iter().find(|t| t.id == "t1").unwrap();
+    let solo = tasks.iter().find(|t| t.id == "t2").unwrap();
+    assert_eq!(shared.agents, b);
+    assert_eq!(solo.agents, a);
+}
+
+#[test]
+fn wake_targets_only_reachable_tmux_agents() {
+    let mut f = Fixture::new();
+    let terminal = |pane: Option<&str>| Terminal {
+        pid: 4242,
+        tmux_socket: Some("/tmp/tmux-1000/default".into()),
+        tmux_pane: pane.map(String::from),
+    };
+    let a = f.hub.register("claude-code", "p").unwrap();
+    let b = f.hub.register("codex", "p").unwrap();
+    let c = f.hub.register("opencode", "p").unwrap();
+    let plain = f.hub.register("opencode", "p").unwrap();
+    f.hub.set_terminal(&a, &terminal(Some("%1"))).unwrap();
+    f.hub.set_terminal(&b, &terminal(Some("%2"))).unwrap();
+    f.hub.set_terminal(&c, &terminal(Some("%3"))).unwrap();
+    f.hub.set_terminal(&plain, &terminal(None)).unwrap();
+
+    assert_eq!(
+        f.hub.wake_targets(&a, &b).unwrap(),
+        vec![terminal(Some("%2"))]
+    );
+    assert!(
+        f.hub.wake_targets(&a, &plain).unwrap().is_empty(),
+        "not in tmux"
+    );
+    assert!(
+        f.hub.wake_targets(&a, &a).unwrap().is_empty(),
+        "never the sender"
+    );
+
+    f.hub.start_task(&a, "t", None).unwrap();
+    f.hub.join_task(&b, "t1").unwrap();
+    f.hub.join_task(&c, "t1").unwrap();
+    f.hub.end(&c).unwrap();
+    assert_eq!(
+        f.hub.wake_targets(&a, "t1").unwrap(),
+        vec![terminal(Some("%2"))]
+    );
 }

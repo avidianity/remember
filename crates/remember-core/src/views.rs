@@ -46,6 +46,15 @@ pub struct TaskRow {
     pub age: String,
 }
 
+/// An online Agent in the same Project and what it is working on.
+#[derive(Debug, Serialize)]
+pub struct AgentRow {
+    pub id: String,
+    pub label: Option<String>,
+    pub task: Option<String>,
+    pub seen: String,
+}
+
 #[derive(Debug, Serialize)]
 pub struct Context {
     pub agent: String,
@@ -57,14 +66,27 @@ pub struct Context {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub decisions: Vec<DecisionRow>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub agents: Vec<AgentRow>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub tasks: Vec<TaskRow>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub truncated: Option<String>,
 }
 
+/// A Task in `task list`, with the online Agents currently in it.
+#[derive(Debug, Serialize)]
+pub struct TaskListRow {
+    pub id: String,
+    pub title: String,
+    pub status: String,
+    pub agents: String,
+    pub last_agent: String,
+    pub age: String,
+}
+
 #[derive(Debug, Serialize)]
 pub struct TaskList {
-    pub tasks: Vec<TaskRow>,
+    pub tasks: Vec<TaskListRow>,
 }
 
 #[derive(Debug, Serialize)]

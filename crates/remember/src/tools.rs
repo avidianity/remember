@@ -18,7 +18,8 @@ Remember is shared memory for coding agents (Claude Code, Codex, opencode...), s
 - Scopes: user = about the human, all projects; project = this repo; task = only the current task.
 - `recall` before re-investigating something another agent may already know.
 - Before closing a task, promote its memories that stay true.
-- When a result ends with `inbox: N unread`, call `inbox`.
+- When a result ends with `inbox: N unread`, call `inbox`. To converse live with another agent, `send` then `inbox` with `wait`.
+- `context` lists online agents and their tasks; check it before starting work another agent may own.
 - Never store secrets.";
 
 fn tool(name: &'static str, description: &'static str, schema: Value) -> Tool {
@@ -109,16 +110,17 @@ pub fn definitions() -> Vec<Tool> {
         ),
         tool(
             "send",
-            "Message an online agent (codex#91bc) or a task (t7: every agent in or later joining it gets it).",
+            "Message an online agent (codex#91bc) or a task (t7: every agent in or later joining it gets it). \
+             wake types a nudge into idle recipients' tmux panes.",
             object(
-                json!({"to": {"type": "string"}, "text": {"type": "string"}}),
+                json!({"to": {"type": "string"}, "text": {"type": "string"}, "wake": {"type": "boolean"}}),
                 &["to", "text"],
             ),
         ),
         tool(
             "inbox",
-            "Read your unread messages.",
-            object(json!({}), &[]),
+            "Read your unread messages. wait: seconds (max 50) to block until one arrives, for live back-and-forth.",
+            object(json!({"wait": {"type": "integer"}}), &[]),
         ),
     ]
 }
@@ -182,9 +184,18 @@ struct BriefArgs {
 struct SendArgs {
     to: String,
     text: String,
+    #[serde(default)]
+    wake: bool,
 }
 
-fn parse<T: DeserializeOwned>(args: Option<JsonObject>) -> Result<T, Error> {
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct InboxArgs {
+    #[serde(default)]
+    pub wait: u64,
+}
+
+pub fn parse<T: DeserializeOwned>(args: Option<JsonObject>) -> Result<T, Error> {
     serde_json::from_value(Value::Object(args.unwrap_or_default()))
         .map_err(|e| Error::rejected(format!("invalid arguments: {e}")))
 }
@@ -271,9 +282,16 @@ pub fn call(
         }
         "send" => {
             let args: SendArgs = parse(args)?;
-            hub.send(agent, &args.to, &args.text)
+            let sent = hub.send(agent, &args.to, &args.text)?;
+            if !args.wake {
+                return Ok(sent);
+            }
+            let woken = crate::wake::wake(&hub.wake_targets(agent, &args.to)?, agent);
+            Ok(format!("{sent}, woke {woken}"))
         }
         "inbox" => {
+            // Waiting is handled by the server before it gets here.
+            let _: InboxArgs = parse(args)?;
             let inbox = hub.inbox(agent)?;
             if inbox.messages.is_empty() {
                 return Ok("no unread messages".to_string());

@@ -11,5 +11,5 @@ pub mod toon;
 pub mod views;
 
 pub use error::{Error, Result};
-pub use hub::{Hub, NewMemory, RecallQuery};
+pub use hub::{Hub, NewMemory, RecallQuery, Terminal};
 pub use model::{Category, Limits, Scope};

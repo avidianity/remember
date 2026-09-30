@@ -8,7 +8,8 @@ use rusqlite::{Connection, TransactionBehavior};
 use crate::error::{Error, Result};
 
 /// Forward-only migrations; entry `i` moves the schema from version `i` to `i + 1`.
-const MIGRATIONS: &[&str] = &[r#"
+const MIGRATIONS: &[&str] = &[
+    r#"
 CREATE TABLE projects (
     id INTEGER PRIMARY KEY,
     ident TEXT NOT NULL UNIQUE,
@@ -111,7 +112,15 @@ CREATE TABLE message_reads (
     read_at INTEGER NOT NULL,
     PRIMARY KEY (message_id, agent_id)
 ) WITHOUT ROWID;
-"#];
+"#,
+    r#"
+-- Where an Agent can be woken: its own process id and, when it runs inside
+-- tmux, the server socket and pane to type into.
+ALTER TABLE agents ADD COLUMN pid INTEGER;
+ALTER TABLE agents ADD COLUMN tmux_socket TEXT;
+ALTER TABLE agents ADD COLUMN tmux_pane TEXT;
+"#,
+];
 
 pub const SCHEMA_VERSION: i64 = MIGRATIONS.len() as i64;
 
@@ -224,6 +233,32 @@ mod tests {
         drop(conn);
         // Reopening an up-to-date file is a no-op.
         open(&path).unwrap();
+    }
+
+    #[test]
+    fn upgrades_a_v1_file_in_place() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("remember.db");
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(MIGRATIONS[0]).unwrap();
+            conn.pragma_update(None, "user_version", 1).unwrap();
+            conn.execute(
+                "INSERT INTO projects (ident, created_at) VALUES ('p', 0)",
+                [],
+            )
+            .unwrap();
+        }
+        let conn = open(&path).unwrap();
+        assert_eq!(schema_version(&conn).unwrap(), SCHEMA_VERSION);
+        let pane: Option<String> = conn
+            .query_row("SELECT tmux_pane FROM agents", [], |r| r.get(0))
+            .unwrap_or(None);
+        assert_eq!(pane, None);
+        let projects: i64 = conn
+            .query_row("SELECT count(*) FROM projects", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(projects, 1, "existing data survives the migration");
     }
 
     #[test]

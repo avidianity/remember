@@ -2,6 +2,7 @@ mod config;
 mod server;
 mod setup;
 mod tools;
+mod wake;
 
 use std::io::Write;
 
