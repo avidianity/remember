@@ -51,13 +51,28 @@ tasks[1]{id,title,status,last_agent,age}:
 
 ## Install
 
-Download a binary from [Releases](https://github.com/avidianity/remember/releases), or build from source:
+### Quick install (Linux and macOS)
+
+```sh
+sh -c "$(curl -fsSL https://raw.githubusercontent.com/avidianity/remember/main/install.sh)"
+```
+
+This downloads the prebuilt binary for your platform, verifies its SHA-256 checksum, and installs it to `~/.local/bin`.
+Override the location with `REMEMBER_INSTALL_DIR`, or pin a version with `REMEMBER_VERSION=v0.1.0`.
+
+### Prebuilt binaries
+
+Download the archive for your platform from [Releases](https://github.com/avidianity/remember/releases) (Linux, macOS and Windows, with SHA-256 checksums), unpack it, and put `remember` on your `PATH`.
+
+### From source
 
 ```sh
 cargo install --git https://github.com/avidianity/remember remember
 ```
 
-Then register it with each agent you use:
+### Register with your agents
+
+Register Remember with each agent you use:
 
 ```sh
 remember setup claude-code
