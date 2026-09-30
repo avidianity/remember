@@ -15,6 +15,7 @@ use crate::error::{Error, Result};
 use crate::model::Limits;
 
 pub use admin::{Export, ExportMemory, ExportRevision, ExportTask, MemoryDetail};
+pub use agent::Terminal;
 pub use memory::{NewMemory, RecallQuery};
 
 type Clock = Box<dyn Fn() -> i64 + Send>;

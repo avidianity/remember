@@ -19,6 +19,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Install tmux for the Wake end-to-end test
+        run: command -v tmux || (sudo apt-get update && sudo apt-get install -y tmux)
       - run: cargo test --workspace
 
   budgets:

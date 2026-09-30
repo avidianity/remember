@@ -41,14 +41,27 @@ impl World {
     }
 
     async fn spawn_in(&self, client_name: &str, cwd: &Path) -> Client {
+        self.spawn_with(client_name, cwd, &[]).await
+    }
+
+    async fn spawn_with(&self, client_name: &str, cwd: &Path, env: &[(&str, &str)]) -> Client {
         let db = self.db.clone();
         let cwd = cwd.to_path_buf();
+        let env: Vec<(String, String)> = env
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
         let transport = TokioChildProcess::new(
             tokio::process::Command::new(env!("CARGO_BIN_EXE_remember")).configure(move |cmd| {
+                // Tests may run inside tmux; never let an Agent register the
+                // developer's real pane.
                 cmd.arg("serve")
                     .current_dir(&cwd)
                     .env("REMEMBER_DB", &db)
-                    .env_remove("HOME");
+                    .env_remove("HOME")
+                    .env_remove("TMUX")
+                    .env_remove("TMUX_PANE")
+                    .envs(env);
             }),
         )
         .unwrap();
@@ -384,4 +397,125 @@ async fn sigterm_marks_agent_offline() {
         )
         .unwrap();
     assert!(ended.is_some(), "agent still looks online after SIGTERM");
+}
+
+#[tokio::test]
+async fn inbox_wait_returns_as_soon_as_mail_arrives() {
+    use std::time::{Duration, Instant};
+
+    let world = World::new();
+    let codex = world.spawn("codex-mcp-client").await;
+    let claude = world.spawn("claude-code").await;
+    let codex_id = field(&ok(&codex, "context", json!({})).await, "agent").to_string();
+
+    let started = Instant::now();
+    let idle = ok(&codex, "inbox", json!({"wait": 1})).await;
+    let waited = started.elapsed();
+    assert!(!idle.contains("claude-code#"), "{idle}");
+    assert!(
+        (Duration::from_millis(900)..Duration::from_secs(3)).contains(&waited),
+        "empty wait took {waited:?}"
+    );
+
+    let sender = async {
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        ok(
+            &claude,
+            "send",
+            json!({"to": codex_id, "text": "schema is ready"}),
+        )
+        .await
+    };
+    let started = Instant::now();
+    let (mail, sent) = tokio::join!(ok(&codex, "inbox", json!({"wait": 30})), sender);
+    let waited = started.elapsed();
+    assert_eq!(sent, "ok");
+    assert!(mail.contains("schema is ready"), "{mail}");
+    assert!(
+        waited < Duration::from_secs(3),
+        "wait ignored new mail for {waited:?}"
+    );
+}
+
+/// A real tmux server stands in for the terminal an idle Agent sits in.
+#[tokio::test]
+async fn send_wake_types_a_nudge_into_the_recipients_tmux_pane() {
+    use std::process::Command;
+    use std::time::Duration;
+
+    if Command::new("tmux").arg("-V").output().is_err() {
+        eprintln!("tmux not installed; skipping");
+        return;
+    }
+    let world = World::new();
+    let socket = world.db.with_file_name("tmux.sock");
+    std::fs::create_dir_all(socket.parent().unwrap()).unwrap();
+    let socket = socket.to_str().unwrap().to_string();
+    let tmux = |args: &[&str]| {
+        let out = Command::new("tmux")
+            .args(["-S", &socket, "-f", "/dev/null"])
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "tmux {args:?}: {out:?}");
+        String::from_utf8(out.stdout).unwrap()
+    };
+    // `cat` echoes whatever is typed, like an agent's input prompt.
+    tmux(&["new-session", "-d", "-x", "200", "-y", "20", "cat"]);
+    let pane = tmux(&["display-message", "-p", "#{pane_id}"])
+        .trim()
+        .to_string();
+    let tmux_env = format!("{socket},0,0");
+
+    let idle = world
+        .spawn_with(
+            "codex-mcp-client",
+            &world.project,
+            &[("TMUX", &tmux_env), ("TMUX_PANE", &pane)],
+        )
+        .await;
+    let idle_id = field(&ok(&idle, "context", json!({})).await, "agent").to_string();
+    let claude = world.spawn("claude-code").await;
+    let claude_id = field(&ok(&claude, "context", json!({})).await, "agent").to_string();
+
+    let sent = ok(
+        &claude,
+        "send",
+        json!({"to": idle_id, "text": "rm -rf / ; review my PR", "wake": true}),
+    )
+    .await;
+    let mut screen = String::new();
+    for _ in 0..40 {
+        screen = tmux(&["capture-pane", "-p", "-t", &pane]);
+        if screen.contains("call the inbox tool") {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let _ = Command::new("tmux")
+        .args(["-S", &socket, "kill-server"])
+        .status();
+
+    assert_eq!(sent, "ok, woke 1");
+    assert!(
+        screen.contains(&format!(
+            "remember: new message from {claude_id}, call the inbox tool"
+        )),
+        "{screen}"
+    );
+    assert!(
+        !screen.contains("rm -rf"),
+        "message text must never be typed: {screen}"
+    );
+    let reply = ok(
+        &idle,
+        "send",
+        json!({"to": claude_id, "text": "on it", "wake": true}),
+    )
+    .await;
+    assert_eq!(
+        reply.lines().next(),
+        Some("ok, woke 0"),
+        "sender outside tmux cannot be woken"
+    );
 }

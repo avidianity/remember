@@ -69,11 +69,14 @@ pub fn run(agent: AgentKind, yes: bool) -> Result<()> {
         bail!("{program} exited with {status}; if remember is already registered, remove it first");
     }
     if let AgentKind::Codex = agent {
-        // `codex mcp add` cannot set this, and without it Codex asks before
-        // every Remember call (and refuses them outright in `codex exec`).
+        // `codex mcp add` cannot set these. Without the approval mode Codex
+        // asks before every Remember call (and refuses them outright in
+        // `codex exec`); without forwarding the tmux variables, which Codex
+        // strips from the server's environment, the Agent can never be woken.
         println!(
-            "\nCodex asks for approval on each MCP call. To allow Remember's tools, add to ~/.codex/config.toml:\n\n  \
-             [mcp_servers.remember]\n  default_tools_approval_mode = \"approve\""
+            "\nCodex asks for approval on each MCP call and hides your tmux pane from Remember. \
+             To allow Remember's tools and let other agents wake Codex, add to ~/.codex/config.toml:\n\n  \
+             [mcp_servers.remember]\n  default_tools_approval_mode = \"approve\"\n  env_vars = [\"TMUX\", \"TMUX_PANE\"]"
         );
     }
     Ok(())

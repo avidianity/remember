@@ -1,0 +1,7 @@
+---
+source: crates/remember-core/tests/payloads.rs
+expression: "stable(tasks, &agent).replace(&codex, \"codex#0000\")"
+---
+tasks[2]{id,title,status,agents,last_agent,age}:
+  t2,Add rate limiting,open,claude-code#0000,claude-code#0000,now
+  t1,Refactor auth,open,codex#0000,codex#0000,now

@@ -29,14 +29,14 @@ Saving the same key in the same scope replaces the old value and keeps it as a r
 
 | Tool | Purpose |
 | --- | --- |
-| `context` | Call first. Returns the agent's id, user memories, project decisions and open tasks. |
+| `context` | Call first. Returns the agent's id, user memories, project decisions, the other agents online in the project and what they are working on, and open tasks. |
 | `remember` | Save one memory to a scope, optionally keyed. |
 | `recall` | Search visible memories, best match first. |
 | `forget` | Delete a memory by id. |
-| `task` | `list`, `start`, `join`, `leave`, `close` (promoting memories to the project) or `reopen` a task. |
+| `task` | `list` (with the agents in each task), `start`, `join`, `leave`, `close` (promoting memories to the project) or `reopen` a task. |
 | `brief` | Read or replace the current task's brief. Writes carry the revision they read, so concurrent edits are never lost. |
-| `send` | Message an online agent (`codex#91bc`) or a task (`t7`). |
-| `inbox` | Read unread messages. Any tool result ends with `inbox: N unread` while mail is waiting. |
+| `send` | Message an online agent (`codex#91bc`) or a task (`t7`). With `wake`, also nudge idle recipients. |
+| `inbox` | Read unread messages, or with `wait` block until one arrives. Any tool result ends with `inbox: N unread` while mail is waiting. |
 
 A first call looks like this:
 
@@ -45,9 +45,26 @@ agent: codex#2e59
 project: github.com/acme/app
 decisions[1]{id,key,age,text}:
   m1,ratelimit.store,4m,Rate limit counters live in Redis.
+agents[1]{id,label,task,seen}:
+  claude-code#3f2f,backend,t1,now
 tasks[1]{id,title,status,last_agent,age}:
   t1,Add rate limiting,open,claude-code#3f2f,4m
 ```
+
+## Talking live
+
+Two agents working side by side converse by sending a message and then calling `inbox` with `wait` (seconds), which returns as soon as the reply lands.
+The wait is capped at 50 seconds, under every supported client's tool-call timeout; call `inbox` again to keep waiting.
+
+An agent sitting idle at its prompt only reacts to typed input.
+If it runs inside tmux, `send` with `wake: true` types this line into its pane, which starts a turn:
+
+```
+remember: new message from claude-code#3f2f, call the inbox tool
+```
+
+Only that fixed line is ever typed, never the message itself, so no agent can inject keystrokes into another's terminal.
+Codex hides the tmux variables from the servers it spawns; `remember setup codex` shows the `env_vars` line that forwards them.
 
 ## Install
 
@@ -83,12 +100,13 @@ remember setup opencode
 `setup` runs the agent's own `mcp add` command, after showing it and asking for confirmation.
 It pins the absolute database path in the agent's config as `REMEMBER_DB`, because agents pass different environments to the servers they spawn and a path derived from the environment could split your memory across two files.
 
-Codex asks for approval before every MCP call.
-To let Remember's tools run without prompts, add this to `~/.codex/config.toml`:
+Codex asks for approval before every MCP call, and hides your tmux pane from the servers it spawns.
+To let Remember's tools run without prompts and let other agents wake Codex, add this to `~/.codex/config.toml`:
 
 ```toml
 [mcp_servers.remember]
 default_tools_approval_mode = "approve"
+env_vars = ["TMUX", "TMUX_PANE"]
 ```
 
 ## Browsing memory yourself

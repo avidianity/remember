@@ -64,11 +64,29 @@ fn stable(text: String, agent: &str) -> String {
     text.replace(agent, "claude-code#0000")
 }
 
+/// A second Agent working in the same Project, labelled and inside `t1`.
+fn teammate(hub: &mut Hub) -> String {
+    let codex = hub.register("codex", "github.com/acme/app").unwrap();
+    hub.context(&codex, Some("frontend")).unwrap();
+    hub.join_task(&codex, "t1").unwrap();
+    codex
+}
+
 #[test]
 fn context_payload() {
-    let (hub, agent) = hub();
+    let (mut hub, agent) = hub();
+    let codex = teammate(&mut hub);
     let context = toon::encode(&hub.context(&agent, None).unwrap()).unwrap();
-    insta::assert_snapshot!(stable(context, &agent));
+    insta::assert_snapshot!(stable(context, &agent).replace(&codex, "codex#0000"));
+}
+
+#[test]
+fn task_list_payload() {
+    let (mut hub, agent) = hub();
+    let codex = teammate(&mut hub);
+    hub.start_task(&agent, "Add rate limiting", None).unwrap();
+    let tasks = toon::encode(&hub.list_tasks(&agent, false).unwrap()).unwrap();
+    insta::assert_snapshot!(stable(tasks, &agent).replace(&codex, "codex#0000"));
 }
 
 #[test]

@@ -100,3 +100,11 @@ An Agent whose process is running and that made a tool call within the last 10 m
 
 **Inbox**:
 The Messages addressed to one Agent that it has not yet read.
+
+**Wait**:
+An Agent blocking on its Inbox for a bounded time until a Message arrives, so two working Agents can converse turn by turn.
+_Avoid_: Subscribe, listen
+
+**Wake**:
+Prompting an idle Online Agent to read its Inbox by typing a fixed nudge into the terminal it runs in; only Agents running inside tmux can be woken.
+_Avoid_: Ping, push, notify
