@@ -77,6 +77,17 @@ sh -c "$(curl -fsSL https://raw.githubusercontent.com/avidianity/remember/main/i
 This downloads the prebuilt binary for your platform, verifies its SHA-256 checksum, and installs it to `~/.local/bin`.
 Override the location with `REMEMBER_INSTALL_DIR`, or pin a version with `REMEMBER_VERSION=v0.2.0`.
 
+### Updating
+
+```sh
+remember update
+```
+
+`update` (alias `upgrade`) replaces the binary with the latest release, after verifying its checksum, and does nothing when you already have it.
+Agents that are running keep the old version until they restart.
+Pass `--force` to reinstall the latest release anyway.
+On Windows, download the new release manually.
+
 ### Prebuilt binaries
 
 Download the archive for your platform from [Releases](https://github.com/avidianity/remember/releases) (Linux, macOS and Windows, with SHA-256 checksums), unpack it, and put `remember` on your `PATH`.

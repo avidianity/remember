@@ -5,14 +5,21 @@
 #   sh -c "$(curl -fsSL https://raw.githubusercontent.com/avidianity/remember/main/install.sh)"
 #
 # Environment overrides:
-#   REMEMBER_VERSION      install a specific tag (e.g. v0.1.0) instead of the latest
-#   REMEMBER_INSTALL_DIR  install location (default: $HOME/.local/bin)
+#   REMEMBER_VERSION       install a specific tag (e.g. v0.1.0) instead of the latest
+#   REMEMBER_INSTALL_DIR   install location (default: $HOME/.local/bin)
+#   REMEMBER_RELEASES_URL  where releases are published (default: GitHub)
+#
+# `remember update` runs this same script with REMEMBER_CURRENT_VERSION set,
+# which skips the install when no newer release exists (REMEMBER_FORCE=1
+# reinstalls anyway).
 
 set -eu
 
 REPO="avidianity/remember"
 BIN="remember"
 INSTALL_DIR="${REMEMBER_INSTALL_DIR:-$HOME/.local/bin}"
+RELEASES="${REMEMBER_RELEASES_URL:-https://github.com/$REPO/releases}"
+CURRENT="${REMEMBER_CURRENT_VERSION:-}"
 
 err()  { printf 'remember-install: error: %s\n' "$1" >&2; exit 1; }
 info() { printf 'remember-install: %s\n' "$1" >&2; }
@@ -20,10 +27,12 @@ info() { printf 'remember-install: %s\n' "$1" >&2; }
 # --- pick a downloader -------------------------------------------------------
 if command -v curl >/dev/null 2>&1; then
   dl_to() { curl -fsSL "$1" -o "$2"; }
-  dl_out() { curl -fsSL "$1"; }
+  final_url() { curl -fsSLI -o /dev/null -w '%{url_effective}' "$1"; }
 elif command -v wget >/dev/null 2>&1; then
   dl_to() { wget -qO "$2" "$1"; }
-  dl_out() { wget -qO- "$1"; }
+  final_url() {
+    wget -S --spider "$1" 2>&1 | sed -n 's/^ *Location: \([^ ]*\).*/\1/p' | tail -n 1
+  }
 else
   err "this installer needs 'curl' or 'wget'"
 fi
@@ -50,17 +59,42 @@ target="${arch_part}-${os_part}"
 version="${REMEMBER_VERSION:-}"
 if [ -z "$version" ]; then
   info "Resolving latest release..."
-  version="$(dl_out "https://api.github.com/repos/$REPO/releases/latest" \
-    | grep '"tag_name"' | head -n 1 \
-    | sed -E 's/.*"tag_name"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/')"
-  [ -n "$version" ] || err "could not determine the latest release; set REMEMBER_VERSION to a tag like v0.1.0"
+  # releases/latest redirects to releases/tag/<version>; unlike the GitHub
+  # API it has no hourly rate limit.
+  version="$(final_url "$RELEASES/latest")" || version=""
+  version="${version##*/}"
+  case "$version" in
+    v[0-9]*) ;;
+    *) err "could not determine the latest release; set REMEMBER_VERSION to a tag like v0.1.0" ;;
+  esac
+fi
+
+# Succeeds when version $1 is newer than $2 (both vX.Y.Z or X.Y.Z).
+newer() {
+  old_ifs="$IFS"
+  IFS=.
+  # shellcheck disable=SC2086
+  set -- ${1#v} ${2#v}
+  IFS="$old_ifs"
+  [ "$#" -eq 6 ] || return 0
+  for part in "$@"; do
+    case "$part" in *[!0-9]* | "") return 0 ;; esac
+  done
+  [ "$1" -ne "$4" ] && { [ "$1" -gt "$4" ]; return; }
+  [ "$2" -ne "$5" ] && { [ "$2" -gt "$5" ]; return; }
+  [ "$3" -gt "$6" ]
+}
+
+if [ -n "$CURRENT" ] && [ "${REMEMBER_FORCE:-}" != 1 ] && ! newer "$version" "$CURRENT"; then
+  info "$BIN v${CURRENT#v} is up to date (latest release: $version)"
+  exit 0
 fi
 
 asset="${BIN}-${target}.tar.gz"
 # The release publishes the checksum as <bin>-<target>.sha256 (extension
 # replaced, not appended), and its contents reference the .tar.gz archive.
 checksum="${BIN}-${target}.sha256"
-base_url="https://github.com/$REPO/releases/download/$version"
+base_url="$RELEASES/download/$version"
 
 info "Installing $BIN $version ($target)"
 
@@ -95,8 +129,25 @@ chmod +x "$binpath"
 
 # --- install -----------------------------------------------------------------
 mkdir -p "$INSTALL_DIR"
-mv "$binpath" "$INSTALL_DIR/$BIN"
+[ -w "$INSTALL_DIR" ] || err "$INSTALL_DIR is not writable; re-run with permission to write there"
+# Stage next to the target, then rename over it: a rename is atomic and
+# leaves agents running the old binary untouched, where a copy across
+# filesystems would write into the running file.
+staged="$INSTALL_DIR/.$BIN.$$"
+cp "$binpath" "$staged" || err "could not write to $INSTALL_DIR"
+chmod 755 "$staged"
+mv -f "$staged" "$INSTALL_DIR/$BIN" || { rm -f "$staged"; err "could not replace $INSTALL_DIR/$BIN"; }
 info "Installed to $INSTALL_DIR/$BIN"
+
+if [ -n "$CURRENT" ]; then
+  if [ "v${CURRENT#v}" = "$version" ]; then
+    info "Reinstalled $BIN $version."
+  else
+    info "Updated $BIN v${CURRENT#v} to $version."
+  fi
+  info "Running agents keep the old version until they restart."
+  exit 0
+fi
 
 case ":$PATH:" in
   *":$INSTALL_DIR:"*) ;;
