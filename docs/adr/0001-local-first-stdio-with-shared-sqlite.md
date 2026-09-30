@@ -11,5 +11,6 @@ The core stays transport-agnostic so a streamable HTTP transport can be added la
 - The server cannot push to an idle Agent; unread Messages are surfaced by a trailing line on every tool response, and live conversation relies on Wait and Wake (ADR 0004).
 - Every Agent must open the same file, but clients pass different environments (Codex strips `XDG_DATA_HOME`), so the path comes from an explicit `REMEMBER_DB` written into each Agent's MCP config by `remember setup`, falling back to `$HOME/.local/share/remember/remember.db` with `XDG_DATA_HOME` ignored.
 - The Project is resolved from the server's working directory, which Claude Code, Codex and opencode all set to the project directory; MCP roots are not used because Codex does not support them and SEP-2577 deprecates them.
+- Commits never fsync: with `synchronous = NORMAL` only a WAL checkpoint does, so each process checkpoints on a background connection once writes pause, and SQLite's own in-commit checkpoint is kept only as a backstop at 4,000 pages.
 - Every write transaction starts with `BEGIN IMMEDIATE`: a deferred transaction that reads and then writes gets `SQLITE_BUSY` under WAL without waiting for the busy timeout.
 - Clients stop servers by closing stdin or by signal, so the server handles SIGTERM, SIGINT and SIGHUP to mark its Agent offline.
