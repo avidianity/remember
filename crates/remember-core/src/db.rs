@@ -2,6 +2,8 @@
 
 use std::fs::{self, OpenOptions};
 use std::path::Path;
+use std::sync::mpsc::{self, RecvTimeoutError};
+use std::time::{Duration, Instant};
 
 use rusqlite::{Connection, TransactionBehavior};
 
@@ -132,8 +134,64 @@ pub fn open(path: &Path) -> Result<Connection> {
     create_private(path)?;
     let mut conn = Connection::open(path)?;
     configure(&mut conn)?;
+    checkpoint_in_background(&conn, path)?;
     migrate(&mut conn)?;
     Ok(conn)
+}
+
+/// Moves WAL checkpoints off the calling thread.
+///
+/// A checkpoint copies the WAL back into the main file and fsyncs both, which
+/// takes tens of milliseconds on slow disks. SQLite's automatic checkpoint runs
+/// inside whichever commit crosses the threshold, so that one tool call pays
+/// for it. Instead every commit wakes a thread that, once writes pause,
+/// checkpoints on its own connection; `synchronous = NORMAL` then leaves
+/// commits with no fsync at all. SQLite's own checkpoint stays as a backstop
+/// at four times its default threshold, for writes that never pause and would
+/// otherwise grow the WAL, and slow every read, without bound.
+fn checkpoint_in_background(conn: &Connection, path: &Path) -> Result<()> {
+    conn.pragma_update(None, "wal_autocheckpoint", 4000)?;
+    let (commits, committed) = mpsc::sync_channel::<()>(1);
+    let path = path.to_path_buf();
+    std::thread::Builder::new()
+        .name("remember-checkpoint".into())
+        .spawn(move || checkpointer(&path, &committed))?;
+    conn.commit_hook(Some(move || {
+        // A full channel already holds a pending wake-up.
+        let _ = commits.try_send(());
+        false
+    }))?;
+    Ok(())
+}
+
+/// Checkpoints after each burst of commits until the connection closes.
+fn checkpointer(path: &Path, committed: &mpsc::Receiver<()>) {
+    const QUIET: Duration = Duration::from_millis(100);
+    const MAX_DELAY: Duration = Duration::from_secs(1);
+    // Opened on the first commit so read-only runs never pay for it.
+    let mut conn: Option<Connection> = None;
+    while committed.recv().is_ok() {
+        let deadline = Instant::now() + MAX_DELAY;
+        let open = loop {
+            let wait = QUIET.min(deadline.saturating_duration_since(Instant::now()));
+            match committed.recv_timeout(wait) {
+                Ok(()) if Instant::now() < deadline => {}
+                Ok(()) | Err(RecvTimeoutError::Timeout) => break true,
+                Err(RecvTimeoutError::Disconnected) => break false,
+            }
+        };
+        if conn.is_none() {
+            conn = Connection::open(path).ok();
+        }
+        if let Some(conn) = &conn {
+            // PASSIVE never waits on or blocks other connections; whatever a
+            // reader still needs is copied on the next pass.
+            let _ = conn.query_row("PRAGMA wal_checkpoint(PASSIVE)", [], |_| Ok(()));
+        }
+        if !open {
+            return;
+        }
+    }
 }
 
 pub fn open_in_memory() -> Result<Connection> {
@@ -233,6 +291,32 @@ mod tests {
         drop(conn);
         // Reopening an up-to-date file is a no-op.
         open(&path).unwrap();
+    }
+
+    #[test]
+    fn commits_leave_checkpoints_to_the_background() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("remember.db");
+        let conn = open(&path).unwrap();
+        std::thread::sleep(Duration::from_millis(500));
+        let before = fs::metadata(&path).unwrap().len();
+        conn.execute_batch(
+            "CREATE TABLE bulk (b BLOB); INSERT INTO bulk VALUES (zeroblob(1000000));",
+        )
+        .unwrap();
+        assert_eq!(
+            fs::metadata(&path).unwrap().len(),
+            before,
+            "the commit itself copied the WAL into the main file"
+        );
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while fs::metadata(&path).unwrap().len() < before + 1_000_000 {
+            assert!(
+                Instant::now() < deadline,
+                "the background checkpoint never ran"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
     }
 
     #[test]
