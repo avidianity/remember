@@ -1,0 +1,13 @@
+---
+source: crates/remember-core/tests/payloads.rs
+expression: "stable(context, &agent)"
+---
+agent: claude-code#0000
+project: github.com/acme/app
+current_task: t1
+user[1]{id,key,text}:
+  m1,style,Reply tersely; JSON output must be TOON.
+decisions[1]{id,key,age,text}:
+  m2,db,now,"SQLite in WAL mode, one shared file."
+tasks[1]{id,title,status,last_agent,age}:
+  t1,Refactor auth,open,claude-code#0000,now

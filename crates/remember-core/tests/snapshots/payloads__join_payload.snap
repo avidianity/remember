@@ -1,0 +1,11 @@
+---
+source: crates/remember-core/tests/payloads.rs
+expression: "stable(joined, &agent)"
+---
+task: t1
+title: Refactor auth
+status: open
+brief_revision: 1
+brief: "goal: auth in middleware\nnext: wire routes"
+memories[1]{id,scope,category,key,age,text}:
+  m4,t1,todo,null,now,"Wire /api/v2 routes, then delete the old guard."

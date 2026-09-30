@@ -1,0 +1,7 @@
+---
+source: crates/remember-core/tests/payloads.rs
+expression: "stable(toon::encode(&recall).unwrap(), &agent)"
+---
+memories[2]{id,scope,category,key,age,text}:
+  m2,project,decision,db,now,"SQLite in WAL mode, one shared file."
+  m4,t1,todo,null,now,"Wire /api/v2 routes, then delete the old guard."
