@@ -75,7 +75,7 @@ sh -c "$(curl -fsSL https://raw.githubusercontent.com/avidianity/remember/main/i
 ```
 
 This downloads the prebuilt binary for your platform, verifies its SHA-256 checksum, and installs it to `~/.local/bin`.
-Override the location with `REMEMBER_INSTALL_DIR`, or pin a version with `REMEMBER_VERSION=v0.1.0`.
+Override the location with `REMEMBER_INSTALL_DIR`, or pin a version with `REMEMBER_VERSION=v0.2.0`.
 
 ### Prebuilt binaries
 
