@@ -519,3 +519,62 @@ async fn send_wake_types_a_nudge_into_the_recipients_tmux_pane() {
         "sender outside tmux cannot be woken"
     );
 }
+
+/// Protocol 2026-07-28 has no `initialize`: the client names itself in each
+/// request's `_meta`, and its SDK rejects list results without the cache
+/// fields. Driven over raw JSON-RPC so the wire shape itself is checked.
+#[tokio::test]
+async fn handshake_less_client_lists_tools_and_registers() {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+
+    let world = World::new();
+    let mut child = tokio::process::Command::new(env!("CARGO_BIN_EXE_remember"))
+        .arg("serve")
+        .current_dir(&world.project)
+        .env("REMEMBER_DB", &world.db)
+        .env_remove("HOME")
+        .env_remove("TMUX")
+        .env_remove("TMUX_PANE")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    let mut stdout = BufReader::new(child.stdout.take().unwrap()).lines();
+    let meta = json!({
+        "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+        "io.modelcontextprotocol/clientCapabilities": {},
+        "io.modelcontextprotocol/clientInfo": {"name": "claude-code", "version": "1.0"},
+    });
+    let mut request = async |id: u64, method: &str, mut params: Value| -> Value {
+        params["_meta"] = meta.clone();
+        let line = json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params});
+        stdin
+            .write_all(format!("{line}\n").as_bytes())
+            .await
+            .unwrap();
+        let reply: Value =
+            serde_json::from_str(&stdout.next_line().await.unwrap().unwrap()).unwrap();
+        assert_eq!(reply["id"], id, "{reply}");
+        reply["result"].clone()
+    };
+
+    let tools = request(1, "tools/list", json!({})).await;
+    assert!(tools["ttlMs"].is_u64(), "{tools}");
+    assert!(
+        matches!(tools["cacheScope"].as_str(), Some("public" | "private")),
+        "{tools}"
+    );
+    assert_eq!(tools["tools"].as_array().unwrap().len(), 8);
+
+    let context = request(2, "tools/call", json!({"name": "context", "arguments": {}})).await;
+    assert_eq!(context["isError"], false, "{context}");
+    let text = context["content"][0]["text"].as_str().unwrap();
+    assert!(field(text, "agent").starts_with("claude-code#"), "{text}");
+    let conn = rusqlite::Connection::open(&world.db).unwrap();
+    let agents: i64 = conn
+        .query_row("SELECT COUNT(*) FROM agents", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(agents, 1, "one registration across both requests");
+}

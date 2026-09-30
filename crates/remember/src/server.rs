@@ -1,5 +1,5 @@
 //! The stdio MCP server one Agent spawns. The process is the Agent's identity:
-//! Registration happens automatically during the handshake and is never passed
+//! Registration happens automatically on the first request and is never passed
 //! on tool calls (see ADR 0001).
 
 use std::path::Path;
@@ -11,9 +11,9 @@ use tokio_util::sync::CancellationToken;
 
 use remember_core::{Hub, project};
 use rmcp::model::{
-    CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, Implementation,
-    InitializeRequestParams, InitializeResult, ListToolsResult, PaginatedRequestParams,
-    ServerCapabilities, Tool,
+    CacheScope, CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock,
+    Implementation, InitializeRequestParams, InitializeResult, ListToolsResult,
+    PaginatedRequestParams, ServerCapabilities, Tool,
 };
 use rmcp::service::{RequestContext, RoleServer};
 use rmcp::{ErrorData as McpError, ServerHandler};
@@ -38,6 +38,38 @@ impl RememberServer {
             tools: Arc::new(tools::definitions()),
             project: project::identify(cwd),
         }
+    }
+
+    /// Registers this process as an Agent once. A pre-2026-07-28 client names
+    /// itself in `initialize`; a newer one has no handshake and names itself in
+    /// each request's `_meta`, so the first request registers it. Holding the
+    /// hub lock across the check keeps concurrent first requests from
+    /// registering twice.
+    fn register(&self, client_name: &str) -> Result<(), McpError> {
+        let hub = self.hub.lock().expect("hub lock");
+        if self.agent.get().is_some() {
+            return Ok(());
+        }
+        let agent = hub
+            .register(&agent_kind(client_name), &self.project)
+            .map_err(|e| McpError::internal_error(format!("registration failed: {e}"), None))?;
+        if let Some(terminal) = wake::current_terminal() {
+            let _ = hub.set_terminal(&agent, &terminal);
+        }
+        let _ = self.agent.set(agent);
+        Ok(())
+    }
+
+    /// Registers a handshake-less client from the request `_meta`.
+    fn register_from(&self, context: &RequestContext<RoleServer>) -> Result<(), McpError> {
+        if self.agent.get().is_some() {
+            return Ok(());
+        }
+        let name = context
+            .meta
+            .client_info()
+            .map_or_else(|| UNKNOWN_CLIENT.to_string(), |info| info.name);
+        self.register(&name)
     }
 
     /// Marks the Agent offline once its client disconnects.
@@ -104,6 +136,14 @@ impl RememberServer {
 /// tools); an Agent that needs longer calls `inbox` again.
 const MAX_WAIT: Duration = Duration::from_secs(50);
 
+/// Agent Kind for a handshake-less client that omits `clientInfo`.
+const UNKNOWN_CLIENT: &str = "unknown";
+
+/// How long a client may reuse the tool list. The list is fixed for the
+/// binary's lifetime, but `remember update` swaps the binary under a client
+/// that may cache across reconnects, so it is never reused.
+const TOOLS_TTL_MS: u64 = 0;
+
 /// Maps the MCP client name to an Agent Kind; unknown names pass through.
 pub fn agent_kind(client_name: &str) -> String {
     match client_name {
@@ -126,32 +166,24 @@ impl ServerHandler for RememberServer {
     ) -> Result<InitializeResult, McpError> {
         context.peer.set_peer_info(request.clone());
         let result = self.negotiate_initialize(&request)?;
-        if self.agent.get().is_none() {
-            let kind = agent_kind(&request.client_info.name);
-            let agent = self
-                .hub
-                .lock()
-                .expect("hub lock")
-                .register(&kind, &self.project)
-                .map_err(|e| McpError::internal_error(format!("registration failed: {e}"), None))?;
-            if let Some(terminal) = wake::current_terminal() {
-                let _ = self
-                    .hub
-                    .lock()
-                    .expect("hub lock")
-                    .set_terminal(&agent, &terminal);
-            }
-            let _ = self.agent.set(agent);
-        }
+        self.register(&request.client_info.name)?;
         Ok(result)
     }
 
     async fn list_tools(
         &self,
         _request: Option<PaginatedRequestParams>,
-        _context: RequestContext<RoleServer>,
+        context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, McpError> {
-        Ok(ListToolsResult::with_all_items(self.tools.as_ref().clone()))
+        // Listing tools is the first request a handshake-less client sends, so
+        // the Agent shows up online as soon as it connects. A failure here is
+        // retried, and reported, by the first tool call.
+        let _ = self.register_from(&context);
+        // Protocol 2026-07-28 requires both cache fields on every list result;
+        // older clients ignore them.
+        Ok(ListToolsResult::with_all_items(self.tools.as_ref().clone())
+            .with_ttl_ms(TOOLS_TTL_MS)
+            .with_cache_scope(CacheScope::Private))
     }
 
     fn get_tool(&self, name: &str) -> Option<Tool> {
@@ -163,6 +195,10 @@ impl ServerHandler for RememberServer {
         request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, McpError> {
+        if let Err(e) = self.register_from(&context) {
+            let text = format!("error: {}", e.message);
+            return Ok(CallToolResult::error(vec![ContentBlock::text(text)]).into());
+        }
         if request.name == "inbox"
             && let Ok(args) = tools::parse::<tools::InboxArgs>(request.arguments.clone())
             && args.wait > 0

@@ -10,7 +10,7 @@ Everything Remember returns to an agent is [TOON](https://github.com/toon-format
 
 Every agent spawns its own `remember serve` process over stdio.
 All of them share one SQLite file, so there is no daemon to run.
-The server registers the agent automatically from the MCP handshake: its kind comes from the client name and its project from the working directory (the normalized git `origin` URL, else the git root, else the directory).
+The server registers the agent automatically on the first MCP request (the `initialize` handshake, or the first request of a client on protocol `2026-07-28`, which has no handshake): its kind comes from the client name and its project from the working directory (the normalized git `origin` URL, else the git root, else the directory).
 
 Knowledge lives in three scopes:
 
