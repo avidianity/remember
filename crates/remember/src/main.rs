@@ -2,6 +2,7 @@ mod config;
 mod server;
 mod setup;
 mod tools;
+mod update;
 mod wake;
 
 use std::io::Write;
@@ -57,6 +58,13 @@ enum Command {
     },
     /// Delete a memory by id.
     Forget { id: String },
+    /// Replace this binary with the latest release (Linux and macOS).
+    #[command(visible_alias = "upgrade")]
+    Update {
+        /// Reinstall even when already on the latest release.
+        #[arg(long)]
+        force: bool,
+    },
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -74,6 +82,7 @@ fn main() -> Result<()> {
     match cli.command {
         Command::Serve => serve(),
         Command::Setup { agent, yes } => setup::run(agent, yes),
+        Command::Update { force } => update::run(force),
         Command::Ls {
             scope,
             project,
